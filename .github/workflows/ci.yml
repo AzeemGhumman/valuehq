@@ -1,0 +1,25 @@
+# Checks every pull request: type-check, build, and validate the SAM template. Deploys nothing.
+name: CI
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Type-check
+        run: npm run typecheck
+      - name: Build
+        run: npm run build:lambda
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - name: Validate template
+        run: sam validate --lint --region us-east-1

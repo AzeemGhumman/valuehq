@@ -1,0 +1,269 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ValueHQ: Next.js web app on Lambda (Lambda Web Adapter) behind CloudFront, DynamoDB data,
+  and background jobs on Step Functions. One stack per environment (valuehq-dev, valuehq-prod).
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Environment name. Used in every resource name.
+  LambdaAdapterLayerVersion:
+    Type: Number
+    Default: 24
+    Description: Version of the AWS Lambda Web Adapter layer (arm64).
+
+Conditions:
+  IsProd: !Equals [!Ref Env, prod]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 1024
+    Timeout: 30
+    Environment:
+      Variables:
+        APP_ENV: !Ref Env
+        TABLE_NAME: !Ref Table
+
+Resources:
+  # ---------- data ----------
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub valuehq-${Env}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+
+  # ---------- background jobs ----------
+  JobsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub valuehq-${Env}-jobs
+      Description: Runs each step of ValueHQ background jobs (called by Step Functions)
+      CodeUri: build/jobs
+      Handler: handler.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+
+  JobsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/valuehq-${Env}-jobs
+      RetentionInDays: !If [IsProd, 90, 14]
+
+  CheckSourcesStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub valuehq-${Env}-check-sources
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref JobsFunction }
+      DefinitionSubstitutions:
+        JobsFunctionArn: !GetAtt JobsFunction.Arn
+      Definition:
+        Comment: Check that each source link of an account responds, then summarize.
+        StartAt: Start
+        States:
+          Start:
+            Type: Task
+            Resource: ${JobsFunctionArn}
+            Parameters:
+              action: start
+              workspaceId.$: $.workspaceId
+              jobId.$: $.jobId
+            ResultPath: null
+            Next: CheckSources
+            Catch: [{ ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }]
+          CheckSources:
+            Type: Map
+            ItemsPath: $.sources
+            MaxConcurrency: 5
+            ItemSelector:
+              action: check
+              workspaceId.$: $.workspaceId
+              jobId.$: $.jobId
+              source.$: $$.Map.Item.Value
+            ItemProcessor:
+              ProcessorConfig: { Mode: INLINE }
+              StartAt: Check
+              States:
+                Check:
+                  Type: Task
+                  Resource: ${JobsFunctionArn}
+                  Retry:
+                    - ErrorEquals: [Lambda.ServiceException, Lambda.TooManyRequestsException, Lambda.SdkClientException, States.TaskFailed]
+                      IntervalSeconds: 2
+                      MaxAttempts: 2
+                      BackoffRate: 2
+                  End: true
+            ResultPath: $.results
+            Next: Finish
+            Catch: [{ ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }]
+          Finish:
+            Type: Task
+            Resource: ${JobsFunctionArn}
+            Parameters:
+              action: finish
+              workspaceId.$: $.workspaceId
+              jobId.$: $.jobId
+              results.$: $.results
+            End: true
+            Catch: [{ ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }]
+          MarkFailed:
+            Type: Task
+            Resource: ${JobsFunctionArn}
+            Parameters:
+              action: fail
+              workspaceId.$: $.workspaceId
+              jobId.$: $.jobId
+              error.$: $.error
+            Next: Failed
+          Failed:
+            Type: Fail
+
+  # ---------- web app ----------
+  WebFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub valuehq-${Env}-web
+      Description: Next.js server (standalone output) run by the Lambda Web Adapter
+      CodeUri: build/web
+      Handler: run.sh
+      MemorySize: 1536
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:753240598075:layer:LambdaAdapterLayerArm64:${LambdaAdapterLayerVersion}
+      Environment:
+        Variables:
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/bootstrap
+          AWS_LWA_READINESS_CHECK_PATH: /api/health
+          PORT: '8080'
+          HOSTNAME: 0.0.0.0
+          NODE_ENV: production
+          STATE_MACHINE_ARN: !Ref CheckSourcesStateMachine
+          # A per-stack secret CloudFront sends with every request (see src/middleware.ts).
+          ORIGIN_VERIFY: !Select [2, !Split ['/', !Ref AWS::StackId]]
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt CheckSourcesStateMachine.Name }
+
+  WebLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/valuehq-${Env}-web
+      RetentionInDays: !If [IsProd, 90, 14]
+
+  # ---------- static files (/_next/static) ----------
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+
+  AssetsOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub valuehq-${Env}-assets
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub ${AssetsBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+  # ---------- CloudFront: one https URL in front of everything ----------
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub ValueHQ ${Env}
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: web
+            DomainName: !Select [2, !Split ['/', !GetAtt WebFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+            OriginCustomHeaders:
+              - HeaderName: x-origin-verify
+                HeaderValue: !Select [2, !Split ['/', !Ref AWS::StackId]]
+          - Id: assets
+            DomainName: !GetAtt AssetsBucket.RegionalDomainName
+            OriginAccessControlId: !Ref AssetsOriginAccessControl
+            S3OriginConfig: { OriginAccessIdentity: '' }
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df4-4b5a84be39ad # Managed-CachingDisabled
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+        CacheBehaviors:
+          - PathPattern: /_next/static/*
+            TargetOriginId: assets
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+
+Outputs:
+  AppUrl:
+    Description: Share this link
+    Value: !Sub https://${Distribution.DomainName}
+  DistributionId:
+    Value: !Ref Distribution
+  AssetsBucketName:
+    Value: !Ref AssetsBucket
+  TableName:
+    Value: !Ref Table
+  StateMachineArn:
+    Value: !Ref CheckSourcesStateMachine
+  WebFunctionUrl:
+    Description: Direct Lambda URL (refuses requests that don't come through CloudFront)
+    Value: !GetAtt WebFunctionUrl.FunctionUrl

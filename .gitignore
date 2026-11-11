@@ -1,0 +1,9 @@
+node_modules
+.next
+build
+.aws-sam
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store

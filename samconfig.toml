@@ -1,0 +1,24 @@
+# Deploy settings per environment. Used by scripts/deploy.sh: sam deploy --config-env dev|prod
+version = 0.1
+
+[dev.deploy.parameters]
+stack_name = "valuehq-dev"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=dev"
+resolve_s3 = true
+s3_prefix = "valuehq-dev"
+confirm_changeset = false
+fail_on_empty_changeset = false
+tags = "app=valuehq env=dev"
+
+[prod.deploy.parameters]
+stack_name = "valuehq-prod"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=prod"
+resolve_s3 = true
+s3_prefix = "valuehq-prod"
+confirm_changeset = false
+fail_on_empty_changeset = false
+tags = "app=valuehq env=prod"

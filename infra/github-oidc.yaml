@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  One-time setup: lets GitHub Actions in AzeemGhumman/valuehq deploy ValueHQ without stored AWS keys (OIDC).
+  Deploy once from your Mac (see README "Set up auto-deploy").
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: AzeemGhumman
+  GitHubRepo:
+    Type: String
+    Default: valuehq
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Use 'false' if this AWS account already has the token.actions.githubusercontent.com provider.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: valuehq-github-deploy
+      Description: Assumed by GitHub Actions to deploy the valuehq-dev and valuehq-prod stacks
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Only deploy jobs that run in the repo's "dev" or "prod" GitHub environment.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOwner}/${GitHubRepo}:environment:dev
+                  - !Sub repo:${GitHubOwner}/${GitHubRepo}:environment:prod
+      ManagedPolicyArns:
+        # Everything SAM deploys (Lambda, DynamoDB, Step Functions, S3, CloudFront, CloudFormation, logs)...
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        # ...plus creating the roles for the stack's own functions, limited to valuehq-* roles.
+        - PolicyName: valuehq-stack-roles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PassRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/valuehq-*
+
+Outputs:
+  DeployRoleArn:
+    Description: Put this in the GitHub repo as the variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn

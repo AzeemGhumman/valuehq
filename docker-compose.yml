@@ -1,0 +1,12 @@
+# Local DynamoDB for development: npm run db:local
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
+    ports:
+      - "8000:8000"
+    volumes:
+      - valuehq-dynamodb:/data
+    user: root
+volumes:
+  valuehq-dynamodb:

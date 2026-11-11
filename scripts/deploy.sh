@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Deploys one environment: builds, runs `sam deploy` (CloudFormation stack valuehq-<env>),
+# uploads static files to S3 and clears the CloudFront cache.
+#   npm run deploy -- dev      (from your Mac uses AWS_PROFILE, default "personal")
+#   npm run deploy -- prod
+# GitHub Actions runs the same script with temporary credentials.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+ENV="${1:-}"
+if [[ "$ENV" != "dev" && "$ENV" != "prod" ]]; then echo "Usage: npm run deploy -- dev|prod"; exit 1; fi
+STACK="valuehq-$ENV"
+REGION="${AWS_REGION:-us-east-1}"
+if [ -z "${CI:-}" ]; then export AWS_PROFILE="${AWS_PROFILE:-personal}"; fi
+
+out() {
+  aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true
+}
+sync_static() {
+  local bucket; bucket="$(out AssetsBucketName)"
+  [ -n "$bucket" ] && [ "$bucket" != "None" ] || return 0
+  aws s3 sync build/static "s3://$bucket" --region "$REGION" --cache-control "public,max-age=31536000,immutable" --only-show-errors
+}
+
+echo "→ Building"
+npm run build:lambda
+
+echo "→ Uploading static files (before the new server goes live)"
+sync_static
+
+echo "→ Deploying stack $STACK"
+sam deploy --config-env "$ENV" --region "$REGION"
+
+echo "→ Uploading static files"
+sync_static
+DIST="$(out DistributionId)"
+aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/*" --region "$REGION" >/dev/null
+
+echo ""
+echo "Deployed $ENV: $(out AppUrl)"
