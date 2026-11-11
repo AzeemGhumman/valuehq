@@ -52,6 +52,7 @@ export default async function JobsPage() {
               {j.error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{j.error}</p>}
               <div className="text-muted-foreground flex flex-wrap gap-4 text-xs">
                 {j.accountId && <Link href={`/accounts/${j.accountId}`} className="hover:text-foreground underline">Open account</Link>}
+                {j.jobType === 'build-profile' && <Link href="/company" className="hover:text-foreground underline">Open company profile</Link>}
                 {j.executionArn && <a href={consoleLink(j.executionArn)} target="_blank" rel="noreferrer" className="hover:text-foreground underline">Open in Step Functions</a>}
                 <span>Job {j.id}</span>
               </div>

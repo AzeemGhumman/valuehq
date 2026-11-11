@@ -14,8 +14,8 @@ import { Field } from './field';
 const statusBadge = (s: Source['status']) =>
   s === 'needs-help' ? <Badge variant="warning">Needs help</Badge> : s === 'processing' ? <Badge variant="info">Processing</Badge> : <Badge variant="success">Ready</Badge>;
 
-export function SourcesCard({ ownerType, ownerId, items, returnTo, note, action }: {
-  ownerType: OwnerType; ownerId: string; items: Source[]; returnTo: string; note?: string; action?: React.ReactNode;
+export function SourcesCard({ ownerType, ownerId, items, returnTo, note, action, canEdit = true }: {
+  ownerType: OwnerType; ownerId: string; items: Source[]; returnTo: string; note?: string; action?: React.ReactNode; canEdit?: boolean;
 }) {
   const live = items.filter((s) => s.mode === 'live').length;
   return (
@@ -47,6 +47,7 @@ export function SourcesCard({ ownerType, ownerId, items, returnTo, note, action 
                     <TableCell>{s.mode === 'live' ? <span className="text-emerald-700">● Live</span> : 'One-time'}</TableCell>
                     <TableCell>{statusBadge(s.status)}</TableCell>
                     <TableCell className="text-right">
+                      {canEdit && <>
                       <form id={formId} action={deleteSource}>
                         <input type="hidden" name="id" value={s.id} />
                         <input type="hidden" name="ownerType" value={s.ownerType} />
@@ -54,6 +55,7 @@ export function SourcesCard({ ownerType, ownerId, items, returnTo, note, action 
                         <input type="hidden" name="returnTo" value={returnTo} />
                       </form>
                       <ConfirmSubmit formId={formId} title={`Remove ${s.label}?`} description="ValueHQ stops using this source." confirmLabel="Remove" variant="ghost" size="sm">Remove</ConfirmSubmit>
+                      </>}
                     </TableCell>
                   </TableRow>
                 );
@@ -62,7 +64,7 @@ export function SourcesCard({ ownerType, ownerId, items, returnTo, note, action 
           </Table>
         )}
 
-        <details className="group">
+        {canEdit && <details className="group">
           <summary className="list-none [&::-webkit-details-marker]:hidden">
             <span className="border-input hover:bg-accent inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-xs"><Plus className="size-4" />Add source</span>
           </summary>
@@ -86,7 +88,7 @@ export function SourcesCard({ ownerType, ownerId, items, returnTo, note, action 
             <div className="flex items-end justify-end"><Button type="submit">Add source</Button></div>
             <p className="text-muted-foreground text-xs sm:col-span-2">File upload isn’t built yet. Sources with a link can be checked with a background job.</p>
           </form>
-        </details>
+        </details>}
       </CardContent>
     </Card>
   );

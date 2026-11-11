@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { ChevronDown, Home, Loader, LogOut, PanelLeft, Plus, Settings, Sparkles } from 'lucide-react';
+import { ChevronDown, Home, Loader, LogOut, PanelLeft, Plus, Settings, ShieldCheck, Sparkles } from 'lucide-react';
 import { logout } from '@/server/actions';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,10 @@ type Props = {
   offerings: Item[];
   accounts: (Item & { priority: string })[];
   activeJobs: number;
+  roleLabel: string;
+  canAddOffering: boolean;
+  canAddAccount: boolean;
+  isOperator?: boolean;
 };
 
 const dot: Record<string, string> = { P1: 'bg-emerald-600', P2: 'bg-primary', P3: 'bg-slate-300' };
@@ -48,7 +52,7 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
-export function Sidebar({ companyName, userName, offerings, accounts, activeJobs }: Props) {
+export function Sidebar({ companyName, userName, offerings, accounts, activeJobs, roleLabel, canAddOffering, canAddAccount, isOperator }: Props) {
   const path = usePathname();
   const is = (href: string, exact = false) => (exact ? path === href : path === href || path.startsWith(href + '/'));
   const [collapsed, setCollapsed] = useState(false);
@@ -84,7 +88,7 @@ export function Sidebar({ companyName, userName, offerings, accounts, activeJobs
             <NavLink href="/company" active={is('/company')}>{companyName || 'Overview'}</NavLink>
             <div className="flex h-8 items-center justify-between pr-1 pl-3 text-sm text-slate-700">
               Offerings
-              <Link href="/offerings/new" className={addBtn} aria-label="Add offering" title="Add offering"><Plus className="size-4" /></Link>
+              {canAddOffering && <Link href="/offerings/new" className={addBtn} aria-label="Add offering" title="Add offering"><Plus className="size-4" /></Link>}
             </div>
             <div className="ml-4 flex flex-col gap-0.5 border-l pl-2">
               {offerings.length === 0 && <span className="text-muted-foreground px-3 py-1.5 text-xs">No offerings yet</span>}
@@ -92,7 +96,7 @@ export function Sidebar({ companyName, userName, offerings, accounts, activeJobs
             </div>
           </Section>
 
-          <Section title="Accounts" action={<Link href="/accounts/new" className={addBtn} aria-label="Add account" title="Add account"><Plus className="size-4" /></Link>}>
+          <Section title="Accounts" action={canAddAccount ? <Link href="/accounts/new" className={addBtn} aria-label="Add account" title="Add account"><Plus className="size-4" /></Link> : undefined}>
             <NavLink href="/accounts" active={is('/accounts', true)}>All accounts</NavLink>
             {accounts.length === 0 && <span className="text-muted-foreground px-3 py-1.5 text-xs">No accounts yet</span>}
             {accounts.map((a) => (
@@ -106,10 +110,11 @@ export function Sidebar({ companyName, userName, offerings, accounts, activeJobs
       )}
 
       <div className="mt-auto flex flex-col gap-1 border-t pt-3">
+        {isOperator && <NavLink href="/admin" active={false} title="Platform admin"><ShieldCheck className="size-4 shrink-0" />{!collapsed && 'Platform admin'}</NavLink>}
         <NavLink href="/settings" active={is('/settings')} title="Settings"><Settings className="size-4 shrink-0" />{!collapsed && 'Settings'}</NavLink>
         <form action={logout} className="flex items-center gap-2.5 pt-1 pl-2">
           <span className="bg-accent text-accent-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold">{userName.slice(0, 1).toUpperCase()}</span>
-          {!collapsed && <span className="min-w-0 flex-1 truncate text-sm font-medium">{userName}</span>}
+          {!collapsed && <span className="min-w-0 flex-1 leading-tight"><span className="block truncate text-sm font-medium">{userName}</span><span className="text-muted-foreground block text-xs">{roleLabel}</span></span>}
           <button type="submit" className={addBtn} aria-label="Log out" title="Log out"><LogOut className="size-4" /></button>
         </form>
       </div>

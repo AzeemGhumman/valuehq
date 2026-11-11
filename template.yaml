@@ -73,16 +73,16 @@ Resources:
       LogGroupName: !Sub /aws/lambda/valuehq-${Env}-jobs
       RetentionInDays: !If [IsProd, 90, 14]
 
-  CheckSourcesStateMachine:
+  SourceJobsStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
-      Name: !Sub valuehq-${Env}-check-sources
+      Name: !Sub valuehq-${Env}-source-jobs
       Policies:
         - LambdaInvokePolicy: { FunctionName: !Ref JobsFunction }
       DefinitionSubstitutions:
         JobsFunctionArn: !GetAtt JobsFunction.Arn
       Definition:
-        Comment: Check that each source link of an account responds, then summarize.
+        Comment: Check (or read) each source link in parallel, then summarize. Used by the check-sources and build-profile jobs.
         StartAt: Start
         States:
           Start:
@@ -160,7 +160,7 @@ Resources:
           PORT: '8080'
           HOSTNAME: 0.0.0.0
           NODE_ENV: production
-          STATE_MACHINE_ARN: !Ref CheckSourcesStateMachine
+          STATE_MACHINE_ARN: !Ref SourceJobsStateMachine
           # A per-stack secret CloudFront sends with every request (see src/middleware.ts).
           ORIGIN_VERIFY: !Select [2, !Split ['/', !Ref AWS::StackId]]
       FunctionUrlConfig:
@@ -168,7 +168,7 @@ Resources:
         InvokeMode: BUFFERED
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref Table }
-        - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt CheckSourcesStateMachine.Name }
+        - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt SourceJobsStateMachine.Name }
 
   WebLogGroup:
     Type: AWS::Logs::LogGroup
@@ -263,7 +263,7 @@ Outputs:
   TableName:
     Value: !Ref Table
   StateMachineArn:
-    Value: !Ref CheckSourcesStateMachine
+    Value: !Ref SourceJobsStateMachine
   WebFunctionUrl:
     Description: Direct Lambda URL (refuses requests that don't come through CloudFront)
     Value: !GetAtt WebFunctionUrl.FunctionUrl

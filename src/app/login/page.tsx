@@ -8,6 +8,12 @@ import { Field } from '@/components/field';
 
 export const metadata = { title: 'Sign in' };
 
+const LOGIN_ERRORS: Record<string, string> = {
+  '1': 'That email and password don’t match.',
+  disabled: 'Your sign-in is turned off. Ask your workspace admin.',
+  paused: 'Your workspace is paused. Contact ValueHQ to turn it back on.',
+};
+
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   if (await getSession()) redirect('/');
   const { error } = await searchParams;
@@ -20,7 +26,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             <h1 className="text-3xl">Sign in</h1>
             <p className="text-muted-foreground mt-1.5 text-sm">Only people invited to your workspace can get in.</p>
           </div>
-          {error && <p role="alert" className="rounded-lg bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700">That email and password don’t match.</p>}
+          {error && <p role="alert" className="rounded-lg bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700">{LOGIN_ERRORS[error] ?? LOGIN_ERRORS['1']}</p>}
           <form action={login} className="flex flex-col gap-4">
             <Field label="Work email"><Input name="email" type="email" autoComplete="email" required placeholder="you@company.com" className="h-11" /></Field>
             <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required placeholder="Your password" className="h-11" /></Field>

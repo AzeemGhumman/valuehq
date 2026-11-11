@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Plus } from 'lucide-react';
-import { requireUser } from '@/server/auth';
+import { pageContext } from '@/server/context';
 import { offerings } from '@/server/repo';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -11,13 +11,13 @@ import { PageHeader } from '@/components/page-header';
 export const metadata = { title: 'Offerings' };
 
 export default async function OfferingsPage({ searchParams }: { searchParams: Promise<{ saved?: string }> }) {
-  const { workspace } = await requireUser();
+  const { workspace, caps } = await pageContext();
   const { saved } = await searchParams;
   const list = await offerings.list(workspace.id);
   return (
     <>
       <PageHeader title="Offerings" description="One per product you sell. Each has its own sources and value map.">
-        <Button asChild><Link href="/offerings/new"><Plus />New offering</Link></Button>
+        {caps['offerings.manage'] && <Button asChild><Link href="/offerings/new"><Plus />New offering</Link></Button>}
       </PageHeader>
       <Flash saved={saved} />
       <Card><CardContent>

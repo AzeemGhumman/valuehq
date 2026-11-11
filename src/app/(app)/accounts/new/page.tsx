@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { createAccount } from '@/server/actions';
+import { pageContext } from '@/server/context';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { AccountFields } from '@/components/account-fields';
@@ -7,7 +9,9 @@ import { PageHeader } from '@/components/page-header';
 
 export const metadata = { title: 'Add account' };
 
-export default function NewAccountPage() {
+export default async function NewAccountPage() {
+  const { caps } = await pageContext();
+  if (!caps['accounts.create']) redirect('/accounts?error=forbidden&need=Add%20accounts');
   return (
     <div className="flex max-w-3xl flex-col gap-6">
       <PageHeader title="Add an account" description="Pick the company and the part you sell into. Add sources next." />

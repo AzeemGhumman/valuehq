@@ -71,6 +71,11 @@ export const users = {
 
 export const sessions = {
   get: (id: string) => get<Session>(`SESSION#${id}`, 'SESSION'),
+  // Signs a user out everywhere (used when they're disabled, removed or their email changes).
+  async removeFor(email: string) {
+    const r = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: '#t = :t AND email = :e', ExpressionAttributeNames: { '#t': 'type' }, ExpressionAttributeValues: { ':t': 'session', ':e': email }, ProjectionExpression: 'PK, SK' }));
+    for (const i of r.Items ?? []) await del(i.PK as string, i.SK as string);
+  },
   put: (s: Session) => put({ PK: `SESSION#${s.id}`, SK: 'SESSION', type: 'session', ttl: Math.floor(new Date(s.expiresAt).getTime() / 1000), ...s }),
   remove: (id: string) => del(`SESSION#${id}`, 'SESSION'),
 };
@@ -78,17 +83,52 @@ export const sessions = {
 // ---------- workspaces ----------
 export const workspaces = {
   get: (id: string) => get<Workspace>(ws(id), 'META'),
-  async create(name: string) {
-    const w: Workspace = { id: newId(), name, createdAt: now() };
+  async create(name: string, extra: Partial<Pick<Workspace, 'kind' | 'createdBy'>> = {}) {
+    const w: Workspace = { id: newId(), name, createdAt: now(), status: 'active', kind: 'customer', ...extra };
     await put({ PK: ws(w.id), SK: 'META', type: 'workspace', ...w });
     return w;
   },
-  // Used by the command-line scripts only.
+  async update(w: Workspace) {
+    await put({ PK: ws(w.id), SK: 'META', type: 'workspace', ...w });
+  },
+  // Every workspace. Used by the admin console and the command-line scripts (a scan: fine for hundreds of orgs).
   async list() {
-    const r = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: 'SK = :m', ExpressionAttributeValues: { ':m': 'META' } }));
-    return (r.Items ?? []).map((i) => strip<Workspace>(i) as Workspace).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const out: Workspace[] = [];
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const r = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: 'SK = :m', ExpressionAttributeValues: { ':m': 'META' }, ExclusiveStartKey }));
+      for (const i of r.Items ?? []) out.push(strip<Workspace>(i) as Workspace);
+      ExclusiveStartKey = r.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  },
+  // The ValueHQ team's own workspace, created on first use.
+  async internal(): Promise<Workspace> {
+    const found = (await this.list()).find((w) => w.kind === 'internal');
+    return found ?? (await this.create('ValueHQ Platform', { kind: 'internal' }));
+  },
+  // Deletes the workspace, its data and its users.
+  async remove(id: string) {
+    await clearWorkspaceData(id);
+    for (const u of await users.list(id)) { await sessions.removeFor(u.email); await users.remove(u.email); }
+    await del(ws(id), 'META');
   },
 };
+
+// Deletes the company profile, offerings, accounts, sources and jobs of a workspace. Users stay.
+export async function clearWorkspaceData(workspaceId: string) {
+  for (const prefix of ['COMPANY', 'OFFERING#', 'ACCOUNT#', 'SOURCE#', 'JOB#']) {
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const r = await ddb.send(new QueryCommand({
+        TableName: TABLE, KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': ws(workspaceId), ':sk': prefix }, ProjectionExpression: 'PK, SK', ExclusiveStartKey,
+      }));
+      for (const i of r.Items ?? []) await del(i.PK as string, i.SK as string);
+      ExclusiveStartKey = r.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+  }
+}
 
 // ---------- company ----------
 export const company = {

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Check, Plus } from 'lucide-react';
-import { requireUser } from '@/server/auth';
+import { pageContext } from '@/server/context';
 import { accounts, company, jobsRepo, offerings, sources } from '@/server/repo';
 import { STAGES } from '@/lib/labels';
 import { timeAgo } from '@/lib/utils';
@@ -10,11 +10,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { JobBadge } from '@/components/job-badge';
 import { PageHeader } from '@/components/page-header';
+import { ProfileJobBanner } from '@/components/profile-job-banner';
 
 export const metadata = { title: 'Home' };
 
 export default async function HomePage() {
-  const { user, workspace } = await requireUser();
+  const { user, workspace, caps } = await pageContext();
   const [c, offs, accts, srcs, jobs] = await Promise.all([
     company.get(workspace.id), offerings.list(workspace.id), accounts.list(workspace.id), sources.listAll(workspace.id), jobsRepo.list(workspace.id),
   ]);
@@ -34,6 +35,7 @@ export default async function HomePage() {
   return (
     <>
       <PageHeader title={`Hello, ${user.name.split(' ')[0]}`} description={`${workspace.name} workspace`} />
+      <ProfileJobBanner jobs={jobs} company={c} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
@@ -59,7 +61,7 @@ export default async function HomePage() {
       <Card>
         <CardHeader>
           <CardTitle>Accounts</CardTitle>
-          <Button asChild size="sm"><Link href="/accounts/new"><Plus />Add account</Link></Button>
+          {caps['accounts.create'] && <Button asChild size="sm"><Link href="/accounts/new"><Plus />Add account</Link></Button>}
         </CardHeader>
         <CardContent>
           {accts.length === 0 ? <p className="text-muted-foreground text-sm">No accounts yet.</p> : (

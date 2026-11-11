@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { createOffering } from '@/server/actions';
+import { pageContext } from '@/server/context';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,7 +11,9 @@ import { PageHeader } from '@/components/page-header';
 
 export const metadata = { title: 'New offering' };
 
-export default function NewOfferingPage() {
+export default async function NewOfferingPage() {
+  const { caps } = await pageContext();
+  if (!caps['offerings.manage']) redirect('/offerings?error=forbidden&need=Create%20offerings');
   return (
     <div className="flex max-w-2xl flex-col gap-6">
       <PageHeader title="New offering" description="A product you sell. Add sources and a value map next." />
