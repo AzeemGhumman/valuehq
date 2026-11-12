@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ValueHQ background workers (stack valuehq-workers-<env>). Deployed separately from the app with
+  scripts/deploy-workers.sh. Long-running research jobs run as Fargate containers, orchestrated by
+  Step Functions, writing to the data bucket and the app's DynamoDB table.
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, prod]
+  ImageUri:
+    Type: String
+    Description: Worker image in ECR (set by scripts/deploy-workers.sh)
+  TaskCpu:
+    Type: String
+    Default: '1024'
+  TaskMemory:
+    Type: String
+    Default: '3072'
+  AnthropicModel:
+    Type: String
+    Default: claude-sonnet-5-5
+  AnthropicWorkspaceId:
+    Type: String
+    Default: ''
+    Description: Anthropic workspace whose costs count as ValueHQ's (empty = the whole Anthropic organization)
+  CostsSchedule:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: ENABLED
+    Description: Daily cost snapshot (each run costs about 4 cents of Cost Explorer requests)
+
+Conditions:
+  IsProd: !Equals [!Ref Env, prod]
+
+Resources:
+  # ---------- network: public subnets, no NAT gateway (tasks get a public IP, nothing can connect in) ----------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub 'valuehq-${Env}-workers' }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway }
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.0.0/20
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.16.0/20
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc }
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties: { RouteTableId: !Ref RouteTable, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref InternetGateway }
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubnetA, RouteTableId: !Ref RouteTable }
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubnetB, RouteTableId: !Ref RouteTable }
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Worker tasks - outbound only
+      VpcId: !Ref Vpc
+      SecurityGroupEgress: [{ IpProtocol: '-1', CidrIp: 0.0.0.0/0 }]
+
+  # ---------- storage ----------
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'valuehq-${Env}-data-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 2 }
+
+  # ---------- logs ----------
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/valuehq/${Env}/workers'
+      RetentionInDays: !If [IsProd, 90, 30]
+  StatesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/valuehq/${Env}/workers-states'
+      RetentionInDays: !If [IsProd, 90, 30]
+
+  # ---------- containers ----------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'valuehq-${Env}-workers'
+      ClusterSettings: [{ Name: containerInsights, Value: disabled }]
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy]
+
+  # What the worker code may touch.
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: worker
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub '${DataBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/valuehq-${Env}'
+              - Effect: Allow
+                Action: [dynamodb:Scan, dynamodb:Query]
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/valuehq-${Env}'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:valuehq/${Env}/anthropic-*'
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:valuehq/anthropic-admin-*'
+              - Effect: Allow   # cost snapshot (filtered to app=valuehq in code)
+                Action: [ce:GetCostAndUsage, ce:GetCostForecast]
+                Resource: '*'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'valuehq-${Env}-worker'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: X86_64 }
+      EphemeralStorage: { SizeInGiB: 50 }
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Tags: [{ Key: app, Value: valuehq }, { Key: env, Value: !Ref Env }]   # copied onto each task, for cost tracking
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref ImageUri
+          Essential: true
+          Environment:
+            - { Name: APP_ENV, Value: !Ref Env }
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            - { Name: TABLE_NAME, Value: !Sub 'valuehq-${Env}' }
+            - { Name: DATA_BUCKET, Value: !Ref DataBucket }
+            - { Name: ANTHROPIC_SECRET_ID, Value: !Sub 'valuehq/${Env}/anthropic' }
+            - { Name: ANTHROPIC_MODEL, Value: !Ref AnthropicModel }
+            - { Name: ANTHROPIC_ADMIN_SECRET_ID, Value: valuehq/anthropic-admin }
+            - { Name: ANTHROPIC_WORKSPACE_ID, Value: !Ref AnthropicWorkspaceId }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+
+  # ---------- orchestration ----------
+  StatesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{ Effect: Allow, Principal: { Service: states.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: run-workers
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/valuehq-${Env}-worker:*'
+              - Effect: Allow
+                Action: [ecs:StopTask, ecs:DescribeTasks, ecs:TagResource]
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: [!GetAtt ExecutionRole.Arn, !GetAtt TaskRole.Arn]
+              - Effect: Allow   # lets runTask.sync wait for the task to stop
+                Action: [events:PutTargets, events:PutRule, events:DescribeRule]
+                Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule'
+              - Effect: Allow   # MarkFailed writes the job record directly
+                Action: dynamodb:UpdateItem
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/valuehq-${Env}'
+              - Effect: Allow
+                Action: [logs:CreateLogDelivery, logs:GetLogDelivery, logs:UpdateLogDelivery, logs:DeleteLogDelivery, logs:ListLogDeliveries,
+                         logs:PutResourcePolicy, logs:DescribeResourcePolicies, logs:DescribeLogGroups]
+                Resource: '*'
+
+  # Website ingestion: crawl, then (optionally) summarize with Claude. Started by the app
+  # (src/server/jobs.ts startIngestWebsite) with input:
+  #   { workspaceId, jobId, crawl: {start_url, include, exclude, scope, max_pages, ...}, analyze: bool, lastStep: bool }
+  WebsiteIngestStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub 'valuehq-${Env}-website-ingest'
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StatesRole.Arn
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations: [{ CloudWatchLogsLogGroup: { LogGroupArn: !GetAtt StatesLogGroup.Arn } }]
+      DefinitionSubstitutions:
+        Cluster: !GetAtt Cluster.Arn
+        TaskDefinition: !Ref TaskDefinition
+        SubnetA: !Ref SubnetA
+        SubnetB: !Ref SubnetB
+        SecurityGroup: !Ref TaskSecurityGroup
+        TableName: !Sub 'valuehq-${Env}'
+      Definition:
+        Comment: Crawl a website into S3, then summarize it with Claude.
+        StartAt: Crawl
+        States:
+          Crawl:
+            Type: Task
+            Resource: arn:aws:states:::ecs:runTask.sync
+            Parameters:
+              Cluster: '${Cluster}'
+              TaskDefinition: '${TaskDefinition}'
+              LaunchType: FARGATE
+              PropagateTags: TASK_DEFINITION
+              NetworkConfiguration:
+                AwsvpcConfiguration: { Subnets: ['${SubnetA}', '${SubnetB}'], SecurityGroups: ['${SecurityGroup}'], AssignPublicIp: ENABLED }
+              Overrides:
+                ContainerOverrides:
+                  - Name: worker
+                    Command: [crawl]
+                    Environment: [{ Name: JOB_INPUT, Value.$: States.JsonToString($) }]
+            ResultSelector: { exitCode.$: '$.Containers[0].ExitCode' }
+            ResultPath: $.crawlTask
+            TimeoutSeconds: 28800
+            Retry:
+              - ErrorEquals: [ECS.AmazonECSException, ECS.ServerException, ECS.ClientException]
+                IntervalSeconds: 30
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch: [{ ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }]
+            Next: CrawlExited
+          CrawlExited:
+            Type: Choice
+            Choices: [{ Variable: $.crawlTask.exitCode, NumericEquals: 0, Next: ShouldAnalyze }]
+            Default: CrawlError
+          CrawlError:
+            Type: Pass
+            Result: { Error: The crawler stopped with an error. See the worker logs. }
+            ResultPath: $.error
+            Next: MarkFailed
+          ShouldAnalyze:
+            Type: Choice
+            Choices: [{ Variable: $.analyze, BooleanEquals: true, Next: Analyze }]
+            Default: Done
+          Analyze:
+            Type: Task
+            Resource: arn:aws:states:::ecs:runTask.sync
+            Parameters:
+              Cluster: '${Cluster}'
+              TaskDefinition: '${TaskDefinition}'
+              LaunchType: FARGATE
+              PropagateTags: TASK_DEFINITION
+              NetworkConfiguration:
+                AwsvpcConfiguration: { Subnets: ['${SubnetA}', '${SubnetB}'], SecurityGroups: ['${SecurityGroup}'], AssignPublicIp: ENABLED }
+              Overrides:
+                ContainerOverrides:
+                  - Name: worker
+                    Command: [analyze]
+                    Environment: [{ Name: JOB_INPUT, Value.$: States.JsonToString($) }]
+            ResultSelector: { exitCode.$: '$.Containers[0].ExitCode' }
+            ResultPath: $.analyzeTask
+            TimeoutSeconds: 3600
+            Retry:
+              - ErrorEquals: [ECS.AmazonECSException, ECS.ServerException, ECS.ClientException]
+                IntervalSeconds: 30
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch: [{ ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }]
+            Next: AnalyzeExited
+          AnalyzeExited:
+            Type: Choice
+            Choices: [{ Variable: $.analyzeTask.exitCode, NumericEquals: 0, Next: Done }]
+            Default: AnalyzeError
+          AnalyzeError:
+            Type: Pass
+            Result: { Error: The summary step stopped with an error. See the worker logs. }
+            ResultPath: $.error
+            Next: MarkFailed
+          MarkFailed:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:updateItem
+            Parameters:
+              TableName: '${TableName}'
+              Key:
+                PK: { S.$: "States.Format('WS#{}', $.workspaceId)" }
+                SK: { S.$: "States.Format('JOB#{}', $.jobId)" }
+              UpdateExpression: 'SET #s = :s, #e = :e, finishedAt = :t, updatedAt = :t'
+              ExpressionAttributeNames: { '#s': status, '#e': error }
+              ExpressionAttributeValues:
+                ':s': { S: failed }
+                ':e': { S.$: $.error.Error }
+                ':t': { S.$: $$.State.EnteredTime }
+            Next: Failed
+          Failed:
+            Type: Fail
+          Done:
+            Type: Succeed
+
+  # Daily cost snapshot: AWS (Cost Explorer, tag app=valuehq) and Anthropic (Admin API cost report),
+  # stored in the app's table for the admin console's Costs page. Operators can also run it from there.
+  CostsStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub 'valuehq-${Env}-costs'
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StatesRole.Arn
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations: [{ CloudWatchLogsLogGroup: { LogGroupArn: !GetAtt StatesLogGroup.Arn } }]
+      DefinitionSubstitutions:
+        Cluster: !GetAtt Cluster.Arn
+        TaskDefinition: !Ref TaskDefinition
+        SubnetA: !Ref SubnetA
+        SubnetB: !Ref SubnetB
+        SecurityGroup: !Ref TaskSecurityGroup
+      Definition:
+        Comment: Pull AWS and Anthropic costs into the app's table.
+        StartAt: Costs
+        States:
+          Costs:
+            Type: Task
+            Resource: arn:aws:states:::ecs:runTask.sync
+            Parameters:
+              Cluster: '${Cluster}'
+              TaskDefinition: '${TaskDefinition}'
+              LaunchType: FARGATE
+              PropagateTags: TASK_DEFINITION
+              NetworkConfiguration:
+                AwsvpcConfiguration: { Subnets: ['${SubnetA}', '${SubnetB}'], SecurityGroups: ['${SecurityGroup}'], AssignPublicIp: ENABLED }
+              Overrides:
+                ContainerOverrides: [{ Name: worker, Command: [costs] }]
+            ResultSelector: { exitCode.$: '$.Containers[0].ExitCode' }
+            TimeoutSeconds: 900
+            Retry:
+              - ErrorEquals: [ECS.AmazonECSException, ECS.ServerException, ECS.ClientException]
+                IntervalSeconds: 30
+                MaxAttempts: 3
+                BackoffRate: 2
+            Next: CostsExited
+          CostsExited:
+            Type: Choice
+            Choices: [{ Variable: $.exitCode, NumericEquals: 0, Next: Done }]
+            Default: Failed
+          Failed:
+            Type: Fail
+            Error: CostsFailed
+            Cause: The cost job stopped with an error. See the worker logs.
+          Done:
+            Type: Succeed
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{ Effect: Allow, Principal: { Service: scheduler.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: start-costs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{ Effect: Allow, Action: states:StartExecution, Resource: !Ref CostsStateMachine }]
+
+  CostsDailySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub 'valuehq-${Env}-costs-daily'
+      Description: Daily AWS and Anthropic cost snapshot for the admin console
+      ScheduleExpression: cron(17 13 * * ? *)
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      State: !Ref CostsSchedule
+      Target:
+        Arn: !Ref CostsStateMachine
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{}'
+
+Outputs:
+  DataBucketName:
+    Value: !Ref DataBucket
+  WebsiteIngestStateMachineArn:
+    Value: !Ref WebsiteIngestStateMachine
+  ClusterName:
+    Value: !Ref Cluster
+  WorkerLogGroup:
+    Value: !Ref WorkerLogGroup
+  CostsStateMachineArn:
+    Value: !Ref CostsStateMachine

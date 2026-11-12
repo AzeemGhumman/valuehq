@@ -85,7 +85,7 @@ export const OPERATOR = {
   can: [
     'See every org, with its members, status and background jobs',
     'Provision an org: company, website and sources, first admin, optional sample data',
-    'Start a background job that reads the company’s website and sources and drafts its profile',
+    'Crawl an org’s website and re-run crawls (only operators can start crawls; org admins and members can’t)',
     'Open any org as its admin (every action there is recorded under the operator’s email)',
     'Rename, disable, enable and delete orgs; load a sample profile into an org',
     'Add, remove, disable and enable people in any org; set their role, email and password',

@@ -6,6 +6,8 @@ const variant: Record<string, 'success' | 'warning' | 'info' | 'destructive' | '
   done: 'success', 'needs-help': 'warning', running: 'info', queued: 'secondary', waiting: 'secondary', failed: 'destructive',
 };
 
-export function JobBadge({ status }: { status: JobStatus | StepStatus }) {
-  return <Badge variant={variant[status] ?? 'secondary'}>{JOB_STATUS[status] ?? (status === 'waiting' ? 'Waiting' : status)}</Badge>;
+// `label` replaces the standard wording (customer views use softer wording for problems).
+export function JobBadge({ status, label }: { status: JobStatus | StepStatus; label?: string }) {
+  const v = label && (status === 'failed' || status === 'needs-help') ? 'warning' : variant[status] ?? 'secondary';
+  return <Badge variant={v}>{label ?? JOB_STATUS[status] ?? (status === 'waiting' ? 'Waiting' : status)}</Badge>;
 }

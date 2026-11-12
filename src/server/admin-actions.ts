@@ -7,9 +7,12 @@ import { redirect } from 'next/navigation';
 import { auth } from '@config/auth';
 import { ROLES, type Role } from '@config/roles';
 import { requireOperator, setActingWorkspace } from './auth';
-import { startBuildProfile } from './jobs';
+import { canIngestWebsite, startBuildProfile, startCostsRefresh, startIngestWebsite } from './jobs';
+import { crawlOptionsFrom, websiteUrl } from './crawl-options';
+import { loadCrawl } from './crawl-data';
+import type { CrawlOptions } from './types';
 import { hashPassword } from './password';
-import { accounts, company, newId, sessions, sources, users, workspaces } from './repo';
+import { accounts, company, jobsRepo, newId, sessions, sources, users, workspaces } from './repo';
 import { loadProfile, PROFILES } from './seed';
 import type { User, Workspace } from './types';
 
@@ -30,12 +33,7 @@ const role = (fd: FormData): Role => { const r = text(fd, 'role'); return r && (
 const go = (path: string, flag: string): never => redirect(`${path}${path.includes('?') ? '&' : '?'}${flag}`);
 const refresh = () => revalidatePath('/', 'layout');
 
-// "acme.com" → "https://acme.com". Returns undefined for anything that isn't a web link.
-function normalizeUrl(raw: string | undefined) {
-  if (!raw) return undefined;
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try { const u = new URL(withScheme); return u.hostname.includes('.') ? u.toString() : undefined; } catch { return undefined; }
-}
+const normalizeUrl = websiteUrl;
 const hostLabel = (url: string) => new URL(url).hostname.replace(/^www\./, '');
 
 async function org(id: string): Promise<Workspace> {
@@ -77,7 +75,10 @@ export async function provisionOrg(fd: FormData) {
 
   let flag = 'saved=provisioned';
   if (text(fd, 'buildProfile') === 'on') {
-    const job = await startBuildProfile(ws.id, me.email, name);
+    // In AWS: crawl the whole site and summarize it with Claude (workers stack). Locally: quick in-app read of the links.
+    const job = website && canIngestWebsite()
+      ? await startIngestWebsite(ws.id, me.email, crawlOptionsFrom(fd, website))
+      : await startBuildProfile(ws.id, me.email, name);
     flag = job ? 'saved=provisioned-job' : 'saved=provisioned&error=no-sources';
   }
   refresh();
@@ -134,6 +135,66 @@ export async function rebuildProfile(fd: FormData) {
   const job = await startBuildProfile(w.id, me.email, name);
   refresh();
   go(orgPath(w.id), job ? 'saved=job' : 'error=no-sources');
+}
+
+// Crawl (or re-crawl part of) an org's website with the given options, optionally followed by the Claude summary.
+export async function crawlWebsite(fd: FormData) {
+  const { me } = await requireOperator();
+  const w = await org(required(fd, 'id'));
+  const url = websiteUrl(text(fd, 'url') ?? (await company.get(w.id))?.website);
+  if (!url) go(orgPath(w.id), 'error=no-website');
+  if (!canIngestWebsite()) go(orgPath(w.id), 'error=workers-off');
+  await startIngestWebsite(w.id, me.email, crawlOptionsFrom(fd, url!), text(fd, 'analyze') === 'on');
+  refresh();
+  go(orgPath(w.id), 'saved=job');
+}
+
+// Re-runs an earlier crawl with the same settings. With `whole`, the paths limit is dropped: the whole site.
+export async function rerunCrawl(fd: FormData) {
+  const { me } = await requireOperator();
+  const w = await org(required(fd, 'id'));
+  const previous = await jobsRepo.get(w.id, required(fd, 'jobId'));
+  if (!previous?.crawl) go(orgPath(w.id), 'error=no-crawl');
+  if (!canIngestWebsite()) go(orgPath(w.id), 'error=workers-off');
+  const crawl = text(fd, 'whole') === '1' ? { ...previous!.crawl!, scope: [] } : previous!.crawl!;
+  await startIngestWebsite(w.id, me.email, crawl, previous!.analyze ?? true);
+  refresh();
+  go(orgPath(w.id), 'saved=job');
+}
+
+// Pulls fresh AWS and Anthropic costs now instead of waiting for the daily run (takes a minute or two).
+export async function refreshCosts() {
+  await requireOperator();
+  const started = await startCostsRefresh();
+  go('/admin/costs', started ? 'saved=costs' : 'error=workers-off');
+}
+
+// From the crawl explorer: re-crawl the whole site, one folder, or specific pages, with the settings of the
+// crawl being viewed. Pages not re-crawled are carried over, so the new crawl still describes the whole site.
+export async function rerunPages(fd: FormData) {
+  const { me } = await requireOperator();
+  const w = await org(required(fd, 'id'));
+  const host = required(fd, 'host');
+  const crawlId = required(fd, 'crawlId');
+  const back = `${orgPath(w.id)}/crawls/${encodeURIComponent(host)}/${encodeURIComponent(crawlId)}`;
+  if (!canIngestWebsite()) go(back, 'error=workers-off');
+  const { config } = await loadCrawl(w.id, host, crawlId);
+  if (!config?.start_url) go(back, 'error=no-crawl');
+  const base: CrawlOptions = {
+    start_url: config!.start_url, include: config!.include, exclude: config!.exclude, max_pages: config!.max_pages,
+    max_depth: config!.max_depth, strategy: config!.strategy, render_js: config!.render_js,
+  };
+  const mode = text(fd, 'mode');
+  let crawl: CrawlOptions = base;
+  if (mode === 'folder') crawl = { ...base, scope: [required(fd, 'folder')] };
+  if (mode === 'pages') {
+    const urls = [...new Set(fd.getAll('url').filter((u): u is string => typeof u === 'string' && u.startsWith('http')))].slice(0, 2000);
+    if (urls.length === 0) go(back, 'error=no-pages');
+    crawl = { ...base, urls, follow_links: false };
+  }
+  await startIngestWebsite(w.id, me.email, crawl, text(fd, 'analyze') === 'on');
+  refresh();
+  go(orgPath(w.id), 'saved=job');
 }
 
 // Work inside an org as its admin. A banner at the top of every page leads back.

@@ -4,7 +4,7 @@ import { aws } from '@config/aws';
 import { jobs as jobsConfig } from '@config/jobs';
 import { checkSource, fail, finish, start, type SourceTask } from '@/jobs/steps';
 import { jobsRepo, sources, timeId } from './repo';
-import type { Account, Job, JobType, Source } from './types';
+import type { Account, CrawlOptions, Job, JobType, Source } from './types';
 
 const sfn = new SFNClient({ region: aws.region });
 
@@ -54,4 +54,43 @@ export async function startBuildProfile(workspaceId: string, createdBy: string, 
   const list = (await sources.list(workspaceId, 'company', workspaceId)).filter((s) => s.url);
   if (list.length === 0) return null;
   return runSourceJob(workspaceId, createdBy, 'build-profile', `Build the ${companyName} profile`, list);
+}
+
+// ---------- website ingestion (workers stack) ----------
+
+// True when the workers stack is wired up (WEBSITE_INGEST_STATE_MACHINE_ARN). False locally.
+export const canIngestWebsite = () => !!jobsConfig.websiteIngestArn;
+
+// Crawls the website into S3 and (with analyze) summarizes it with Claude, in the workers stack.
+// A scope (paths) re-crawls only those paths and keeps the rest of the previous crawl.
+export async function startIngestWebsite(workspaceId: string, createdBy: string, crawl: CrawlOptions, analyze = true): Promise<Job | null> {
+  if (!jobsConfig.websiteIngestArn) return null;
+  const now = new Date().toISOString();
+  const host = crawl.start_url.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+  const partial = (crawl.scope ?? []).length > 0;
+  const pages = (crawl.urls ?? []).length;
+  const job: Job = {
+    id: timeId(), workspaceId, jobType: 'ingest-website', status: 'queued',
+    title: pages ? `Re-crawl ${pages} page${pages === 1 ? '' : 's'} on ${host}` : partial ? `Refresh ${host}${crawl.scope!.join(', ')}` : `Read ${host}`,
+    steps: [
+      { name: pages ? `Re-crawl ${pages} page${pages === 1 ? '' : 's'}` : partial ? `Re-crawl ${crawl.scope!.join(', ')}` : `Crawl ${host}`, status: 'waiting' },
+      ...(analyze ? [{ name: 'Summarize with Claude: what they do and how they price', status: 'waiting' as const }] : []),
+    ],
+    doneCount: 0, totalCount: analyze ? 2 : 1, createdBy, createdAt: now, updatedAt: now, crawl, analyze,
+  };
+  await jobsRepo.put(job);
+  // The full settings live on the job record (the worker reads them there); a long page list wouldn't fit in the container's environment.
+  const input = { workspaceId, jobId: job.id, crawl: { start_url: crawl.start_url }, crawlOnJob: true, analyze, lastStep: !analyze };
+  const res = await sfn.send(new StartExecutionCommand({ stateMachineArn: jobsConfig.websiteIngestArn, name: job.id, input: JSON.stringify(input) }));
+  await jobsRepo.patch(workspaceId, job.id, { executionArn: res.executionArn });
+  return job;
+}
+
+// ---------- cost snapshot (workers stack) ----------
+export const canRefreshCosts = () => !!jobsConfig.costsArn;
+
+export async function startCostsRefresh(): Promise<boolean> {
+  if (!jobsConfig.costsArn) return false;
+  await sfn.send(new StartExecutionCommand({ stateMachineArn: jobsConfig.costsArn, input: '{}' }));
+  return true;
 }

@@ -2,6 +2,7 @@ import { auth } from '@config/auth';
 import { requireOperator } from '@/server/auth';
 import { provisionOrg } from '@/server/admin-actions';
 import { PROFILES } from '@/server/seed';
+import { canIngestWebsite } from '@/server/jobs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,6 +17,7 @@ export const metadata = { title: 'New org' };
 export default async function NewOrgPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   await requireOperator();
   const { error } = await searchParams;
+  const workers = canIngestWebsite();
   return (
     <>
       <PageHeader eyebrow="Orgs" title="New org" description="Creates the workspace, its company profile and first admin. The profile job reads their website so they see their company when they first sign in." />
@@ -29,8 +31,11 @@ export default async function NewOrgPage({ searchParams }: { searchParams: Promi
             <Field label="Other links (one per line): product pages, press, about page" className="sm:col-span-2"><Textarea name="urls" rows={3} placeholder={'acme.com/product\nacme.com/about'} /></Field>
             <label className="flex items-start gap-2.5 text-sm sm:col-span-2">
               <input type="checkbox" name="buildProfile" defaultChecked className="mt-0.5 size-4" />
-              <span><span className="font-medium">Build their profile in the background</span><span className="text-muted-foreground block">Reads each link and drafts the empty fields of the company profile (Category, What we do). Nothing they write is overwritten.</span></span>
+              <span><span className="font-medium">Build their profile in the background</span><span className="text-muted-foreground block">{workers
+                ? 'Crawls their whole website into storage, then Claude summarizes what they do and how they price, and fills the empty profile fields. Nothing they write is overwritten.'
+                : 'Reads each link and drafts the empty fields of the company profile (Category, What we do). Nothing they write is overwritten. (Full website reading runs in AWS only.)'}</span></span>
             </label>
+            {workers && <Field label="Max pages to crawl"><Input name="maxPages" type="number" min={1} max={20000} defaultValue={500} className="sm:max-w-40" /></Field>}
           </CardContent>
         </Card>
         <Card>

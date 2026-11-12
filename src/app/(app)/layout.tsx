@@ -1,5 +1,6 @@
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar';
+import { needsAttention } from '@/lib/job-view';
 import { exitOrg } from '@/server/admin-actions';
 import { ROLES } from '@config/roles';
 import { pageContext } from '@/server/context';
@@ -12,7 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const [c, offs, accts, jobs] = await Promise.all([
     company.get(workspace.id), offerings.list(workspace.id), accounts.list(workspace.id), jobsRepo.list(workspace.id),
   ]);
-  const activeJobs = jobs.filter((j) => j.status === 'running' || j.status === 'queued' || j.status === 'needs-help').length;
+  const activeJobs = jobs.filter((j) => needsAttention(j)).length;
   return (
     <>
     {operator && (

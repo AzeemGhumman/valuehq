@@ -27,7 +27,7 @@ export interface Workspace {
 
 export interface Company extends Audit {
   name: string; website?: string; tagline?: string; founded?: string; location?: string; stage?: string; headcount?: string;
-  whatWeDo?: string; whoWeSellTo?: string; problem?: string; howItWorks?: string; whyUs?: string; proof?: string;
+  whatWeDo?: string; whoWeSellTo?: string; problem?: string; howItWorks?: string; whyUs?: string; proof?: string; pricing?: string;
   updatedAt?: string;
 }
 
@@ -53,12 +53,49 @@ export interface Source extends Audit {
 
 export type JobStatus = 'queued' | 'running' | 'needs-help' | 'done' | 'failed';
 export type StepStatus = 'waiting' | 'running' | 'done' | 'needs-help' | 'failed';
-// check-sources: checks an account's links. build-profile: reads the company's website and sources
-// and drafts the empty fields of the company profile.
-export type JobType = 'check-sources' | 'build-profile';
+// check-sources: checks an account's links. build-profile: quick in-app read of the company's links.
+// ingest-website: the workers crawl the whole site into S3 and summarize it with Claude (infra/workers.yaml).
+export type JobType = 'check-sources' | 'build-profile' | 'ingest-website';
 export interface JobStep { name: string; status: StepStatus; detail?: string }
 export interface Job {
   id: string; workspaceId: string; jobType: JobType; title: string; status: JobStatus;
   accountId?: string; steps: JobStep[]; doneCount: number; totalCount: number;
   createdBy: string; createdAt: string; updatedAt: string; finishedAt?: string; executionArn?: string; error?: string;
+  // Written by the workers (workers/valuehq_workers): crawl report summary and analysis summary.
+  report?: CrawlReport; analysis?: AnalysisSummary;
+  // ingest-website: the settings it ran with, so an operator can re-run it.
+  crawl?: CrawlOptions; analyze?: boolean;
+}
+
+export interface CrawlFailure { url: string; reason: string; httpStatus?: number | null; attempts?: number; error?: string }
+export interface CrawlReport {
+  crawlId: string; host: string; mode: 'full' | 'partial'; durationSeconds: number;
+  attempted: number; ok: number; unchanged: number; failed: number; pages: number; files: number; carried: number;
+  successRate: number; pageLimit: number; pageLimitReached: boolean;
+  failuresByReason: Record<string, number>; skippedByReason: Record<string, number>; failures: CrawlFailure[]; location: string;
+}
+export interface AnalysisSummary {
+  name: string; promptVersion: string; model: string; pages: number; pricingModel?: string; filled: string[]; gaps: string[];
+  inputTokens: number; outputTokens: number; location: string;
+}
+
+// Options for a website crawl, as the workers expect them (workers/valuehq_workers/crawl/config.py).
+export interface CrawlOptions {
+  start_url: string; include?: string[]; exclude?: string[]; scope?: string[];
+  max_pages?: number; max_depth?: number; strategy?: 'bfs' | 'dfs'; render_js?: boolean;
+  urls?: string[]; follow_links?: boolean;   // re-crawl exactly these pages
+}
+
+// Cost snapshot written daily by the workers (workers/valuehq_workers/costs/run.py). Amounts in USD.
+export interface CostMonth { month: string; total: number; byService?: Record<string, number>; byEnv?: Record<string, number>; byModel?: Record<string, number> }
+export interface CostDay { date: string; amount: number }
+export interface OrgCost {
+  id: string; name: string; fargate: number; anthropic: number; total: number;
+  usage: { crawls: number; crawlSeconds: number; pages: number; inputTokens: number; outputTokens: number };
+}
+export interface CostSnapshot {
+  generatedAt: string; env: string; month: string;
+  aws: { error?: string; tag?: string; months?: CostMonth[]; daily?: CostDay[]; forecastMonthEnd?: number | null; noTaggedData?: boolean };
+  anthropic: { error?: string; workspace?: string; months?: CostMonth[]; daily?: CostDay[] };
+  orgs: OrgCost[];
 }

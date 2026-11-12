@@ -161,6 +161,10 @@ Resources:
           HOSTNAME: 0.0.0.0
           NODE_ENV: production
           STATE_MACHINE_ARN: !Ref SourceJobsStateMachine
+          # Website ingestion lives in the separate workers stack (infra/workers.yaml); its name is fixed, so no import.
+          WEBSITE_INGEST_STATE_MACHINE_ARN: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:valuehq-${Env}-website-ingest'
+          DATA_BUCKET: !Sub 'valuehq-${Env}-data-${AWS::AccountId}'   # the workers' bucket (infra/workers.yaml), read-only here
+          COSTS_STATE_MACHINE_ARN: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:valuehq-${Env}-costs'
           # A per-stack secret CloudFront sends with every request (see src/middleware.ts).
           ORIGIN_VERIFY: !Select [2, !Split ['/', !Ref AWS::StackId]]
       FunctionUrlConfig:
@@ -169,6 +173,9 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt SourceJobsStateMachine.Name }
+        - StepFunctionsExecutionPolicy: { StateMachineName: !Sub 'valuehq-${Env}-website-ingest' }
+        - StepFunctionsExecutionPolicy: { StateMachineName: !Sub 'valuehq-${Env}-costs' }
+        - S3ReadPolicy: { BucketName: !Sub 'valuehq-${Env}-data-${AWS::AccountId}' }
 
   WebLogGroup:
     Type: AWS::Logs::LogGroup
@@ -241,7 +248,7 @@ Resources:
           AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
           CachedMethods: [GET, HEAD]
           Compress: true
-          CachePolicyId: 4135ea2d-6df8-44a3-9df4-4b5a84be39ad # Managed-CachingDisabled
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
           OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
         CacheBehaviors:
           - PathPattern: /_next/static/*

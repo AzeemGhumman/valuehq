@@ -9,10 +9,11 @@
 //   WS#<ws>             / ACCOUNT#<id>               account
 //   WS#<ws>             / SOURCE#<owner>#<ownerId>#<id>   source of the company, an offering or an account
 //   WS#<ws>             / JOB#<id>                   background job (ids sort by time, newest last)
+//   COSTS               / LATEST | SNAPSHOT#<date>   cost snapshot (JSON in `data`), written by the workers
 import { randomUUID } from 'node:crypto';
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE } from './db';
-import type { Account, Company, Job, JobStep, Offering, OwnerType, Session, Source, User, Workspace } from './types';
+import type { Account, Company, CostSnapshot, Job, JobStep, Offering, OwnerType, Session, Source, User, Workspace } from './types';
 
 const ws = (id: string) => `WS#${id}`;
 const now = () => new Date().toISOString();
@@ -207,5 +208,18 @@ export const jobsRepo = {
       TableName: TABLE, Key: { PK: ws(workspaceId), SK: `JOB#${id}` },
       UpdateExpression: expr, ExpressionAttributeNames: names, ExpressionAttributeValues: values,
     }));
+  },
+};
+
+// ---------- costs (written daily by the workers: workers/valuehq_workers/costs) ----------
+export const costs = {
+  async latest(): Promise<CostSnapshot | null> {
+    const item = await get<{ data: string }>('COSTS', 'LATEST');
+    if (!item?.data) return null;
+    try {
+      return JSON.parse(item.data) as CostSnapshot;
+    } catch {
+      return null;
+    }
   },
 };

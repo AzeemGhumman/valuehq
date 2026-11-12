@@ -7,6 +7,7 @@ name: Deploy
 on:
   push:
     branches: [main]
+    paths-ignore: ['workers/**', 'infra/workers.yaml', 'scripts/deploy-workers.sh', '.github/workflows/deploy-workers.yml']
     tags: ['v*']
   workflow_dispatch:
     inputs:

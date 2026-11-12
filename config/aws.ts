@@ -6,4 +6,7 @@ export const aws = {
   // Only set for DynamoDB Local (http://localhost:8000).
   dynamoEndpoint: process.env.DYNAMODB_ENDPOINT || undefined,
   stateMachineArn: process.env.STATE_MACHINE_ARN || undefined,
+  // Where the workers store crawls: the S3 data bucket in AWS, or a local folder (DATA_DIR=.data) on your Mac.
+  dataBucket: process.env.DATA_BUCKET || undefined,
+  dataDir: process.env.DATA_DIR || undefined,
 } as const;

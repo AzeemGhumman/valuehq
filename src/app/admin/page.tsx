@@ -22,7 +22,7 @@ export default async function AdminHome({ searchParams }: { searchParams: Promis
   const rows = await Promise.all(all.map(async (w) => {
     const [people, c, jobs] = await Promise.all([users.list(w.id), company.get(w.id), jobsRepo.list(w.id)]);
     const lastLogin = people.map((p) => p.lastLoginAt).filter(Boolean).sort().at(-1);
-    return { w, people, c, profileJob: jobs.find((j) => j.jobType === 'build-profile'), activeJobs: jobs.filter((j) => j.status === 'running' || j.status === 'queued').length, lastLogin };
+    return { w, people, c, profileJob: jobs.find((j) => j.jobType === 'build-profile' || j.jobType === 'ingest-website'), activeJobs: jobs.filter((j) => j.status === 'running' || j.status === 'queued').length, lastLogin };
   }));
   const customers = rows.filter((r) => r.w.kind !== 'internal');
   const internal = rows.find((r) => r.w.kind === 'internal');
@@ -31,6 +31,8 @@ export default async function AdminHome({ searchParams }: { searchParams: Promis
     { n: customers.filter((r) => r.w.status !== 'disabled').length, label: 'active' },
     { n: customers.reduce((n, r) => n + r.people.length, 0), label: 'people' },
     { n: rows.reduce((n, r) => n + r.activeJobs, 0), label: 'jobs running' },
+    // Customers are told "our team will follow up" when their crawl fails, so failures are counted here.
+    { n: customers.filter((r) => r.profileJob && (r.profileJob.status === 'failed' || r.profileJob.status === 'needs-help')).length, label: 'profile jobs need attention' },
   ];
 
   return (
@@ -39,7 +41,7 @@ export default async function AdminHome({ searchParams }: { searchParams: Promis
         <Button asChild><Link href="/admin/orgs/new"><Plus />New org</Link></Button>
       </PageHeader>
       <Flash saved={saved} error={error} />
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {stats.map((s) => <Card key={s.label} className="gap-1 py-4"><CardContent><div className="text-2xl font-semibold tabular-nums">{s.n}</div><div className="text-muted-foreground text-sm">{s.label}</div></CardContent></Card>)}
       </div>
 

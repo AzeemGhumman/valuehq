@@ -7,3 +7,6 @@ build
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
+.data
+__pycache__
+.venv

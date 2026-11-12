@@ -7,10 +7,13 @@ import { jobs as jobsConfig } from '@config/jobs';
 import { ROLES, ROLE_ORDER } from '@config/roles';
 import { requireOperator } from '@/server/auth';
 import {
-  addOrgMember, deleteOrg, enterOrg, loadSampleData, rebuildProfile, removeOrgMember, renameOrg, setOrgStatus, setUserDisabled, updateOrgMember,
+  addOrgMember, crawlWebsite, deleteOrg, rerunCrawl, enterOrg, loadSampleData, rebuildProfile, removeOrgMember, renameOrg, setOrgStatus, setUserDisabled, updateOrgMember,
 } from '@/server/admin-actions';
 import { accounts, company, jobsRepo, offerings, sources, users, workspaces } from '@/server/repo';
 import { PROFILES } from '@/server/seed';
+import { canIngestWebsite } from '@/server/jobs';
+import { CrawlReportView } from '@/components/crawl-report';
+import { Textarea } from '@/components/ui/textarea';
 import { shortDate, timeAgo } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -39,6 +42,10 @@ export default async function OrgPage({ params, searchParams }: { params: Promis
   people.sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role) || a.name.localeCompare(b.name));
   const running = jobs.some((j) => j.status === 'queued' || j.status === 'running');
   const disabled = w.status === 'disabled';
+  const workers = canIngestWebsite();
+  const crawls = jobs.filter((j) => j.jobType === 'ingest-website');
+  const lastCrawl = crawls[0];
+  const crawlRunning = !!lastCrawl && (lastCrawl.status === 'queued' || lastCrawl.status === 'running');
   const consoleUrl = (arn?: string) => (arn ? `https://${aws.region}.console.aws.amazon.com/states/home?region=${aws.region}#/v2/executions/details/${arn}` : undefined);
 
   return (
@@ -70,7 +77,7 @@ export default async function OrgPage({ params, searchParams }: { params: Promis
                   <ul className="flex flex-col gap-1">{srcs.map((s) => <li key={s.id} className="flex items-center justify-between gap-2"><span className="truncate">{s.label}</span><Badge variant={s.status === 'needs-help' ? 'warning' : 'secondary'}>{s.status === 'needs-help' ? 'Needs help' : 'Ready'}</Badge></li>)}</ul>
                 )}
               </div>
-              <form action={rebuildProfile}><input type="hidden" name="id" value={w.id} /><Button type="submit" variant="outline" size="sm" disabled={running}>{running ? 'A job is running…' : 'Build profile from sources'}</Button></form>
+              {!workers && <form action={rebuildProfile}><input type="hidden" name="id" value={w.id} /><Button type="submit" variant="outline" size="sm" disabled={running}>{running ? 'A job is running…' : 'Build profile from sources'}</Button></form>}
             </CardContent>
           </Card>
 
@@ -94,6 +101,102 @@ export default async function OrgPage({ params, searchParams }: { params: Promis
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {!internal && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col gap-1.5">
+              <CardTitle>Website crawl</CardTitle>
+              <CardDescription>{workers ? 'Runs in the workers stack: every page and file is stored once in S3, then Claude summarizes the site. Pages that didn’t change aren’t downloaded again.' : 'Website crawling runs in AWS (the workers stack) and isn’t available here.'}</CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {!lastCrawl && <p className="text-muted-foreground text-sm">This org’s website hasn’t been crawled yet.</p>}
+            {lastCrawl && (
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-medium">Last crawl</span>
+                  <JobBadge status={lastCrawl.status} />
+                  <span className="text-muted-foreground">started {timeAgo(lastCrawl.createdAt)} by {lastCrawl.createdBy}{lastCrawl.finishedAt ? ` · finished ${timeAgo(lastCrawl.finishedAt)}` : ''}</span>
+                </div>
+                {lastCrawl.crawl && (
+                  <p className="text-muted-foreground text-xs">
+                    {lastCrawl.crawl.start_url} · up to {lastCrawl.crawl.max_pages ?? 500} pages · {lastCrawl.crawl.strategy === 'dfs' ? 'depth first' : 'breadth first'}
+                    {lastCrawl.crawl.scope?.length ? ` · only ${lastCrawl.crawl.scope.join(', ')}` : ' · whole site'}
+                    {lastCrawl.crawl.include?.length ? ` · include ${lastCrawl.crawl.include.join(', ')}` : ''}
+                    {lastCrawl.crawl.exclude?.length ? ` · exclude ${lastCrawl.crawl.exclude.join(', ')}` : ''}
+                    {lastCrawl.crawl.render_js ? ' · JavaScript' : ''}{lastCrawl.analyze === false ? ' · no summary' : ' · with Claude summary'}
+                  </p>
+                )}
+                <ol className="flex flex-col divide-y rounded-lg border text-sm">
+                  {lastCrawl.steps.map((s, i) => (
+                    <li key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                      <span className="min-w-0"><span className="font-medium">{s.name}</span>{s.detail && <span className="text-muted-foreground"> · {s.detail}</span>}</span>
+                      <JobBadge status={s.status} />
+                    </li>
+                  ))}
+                </ol>
+                {lastCrawl.error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{lastCrawl.error}</p>}
+                <CrawlReportView report={lastCrawl.report} analysis={lastCrawl.analysis} showLocation />
+                <div className="flex flex-wrap items-center gap-2">
+                  {workers && lastCrawl.crawl && (
+                    <>
+                      <form action={rerunCrawl}>
+                        <input type="hidden" name="id" value={w.id} /><input type="hidden" name="jobId" value={lastCrawl.id} />
+                        <Button type="submit" size="sm" disabled={crawlRunning}>{crawlRunning ? 'Crawl running…' : 'Re-run crawl'}</Button>
+                      </form>
+                      {!!lastCrawl.crawl.scope?.length && (
+                        <form action={rerunCrawl}>
+                          <input type="hidden" name="id" value={w.id} /><input type="hidden" name="jobId" value={lastCrawl.id} /><input type="hidden" name="whole" value="1" />
+                          <Button type="submit" size="sm" variant="outline" disabled={crawlRunning}>Re-run on the whole site</Button>
+                        </form>
+                      )}
+                    </>
+                  )}
+                  {lastCrawl.report && <Button asChild size="sm" variant="outline"><Link href={`/admin/orgs/${w.id}/crawls/${encodeURIComponent(lastCrawl.report.host)}/${encodeURIComponent(lastCrawl.report.crawlId)}`}>Open in crawl explorer</Link></Button>}
+                  <Link href={`/admin/orgs/${w.id}/crawls`} className="text-muted-foreground text-xs underline">All crawls of this org</Link>
+                  {consoleUrl(lastCrawl.executionArn) && <a href={consoleUrl(lastCrawl.executionArn)} target="_blank" rel="noreferrer" className="text-muted-foreground text-xs underline">Open in Step Functions</a>}
+                </div>
+                {crawls.length > 1 && (
+                  <details className="text-sm">
+                    <summary className="cursor-pointer font-medium">Earlier crawls ({crawls.length - 1})</summary>
+                    <ul className="mt-2 flex flex-col gap-1">
+                      {crawls.slice(1, 11).map((j) => (
+                        <li key={j.id} className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span>{timeAgo(j.createdAt)} · {j.report ? <Link href={`/admin/orgs/${w.id}/crawls/${encodeURIComponent(j.report.host)}/${encodeURIComponent(j.report.crawlId)}`} className="underline">{j.title}</Link> : j.title}{j.report ? ` · ${j.report.pages} pages, ${Math.round(j.report.successRate * 100)}% success` : ''}</span>
+                          <JobBadge status={j.status} />
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
+            {workers && <p className="border-t pt-4 text-sm font-medium">New crawl with different settings</p>}
+            {workers && (
+              <form action={crawlWebsite} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <input type="hidden" name="id" value={w.id} />
+                <Field label="Website" className="sm:col-span-2"><Input name="url" defaultValue={c?.website ?? ''} placeholder="acme.com" required /></Field>
+                <Field label="Max pages"><Input name="maxPages" type="number" min={1} max={20000} defaultValue={500} /></Field>
+                <Field label="Max clicks from start"><Input name="maxDepth" type="number" min={0} max={50} defaultValue={6} /></Field>
+                <Field label="Only these paths (re-crawl part of the site)" className="sm:col-span-2"><Textarea name="scope" rows={2} placeholder={'/pricing\n/products/**'} /></Field>
+                <Field label="Include (empty = everything)"><Textarea name="include" rows={2} placeholder="/products/**" /></Field>
+                <Field label="Exclude"><Textarea name="exclude" rows={2} placeholder="/blog/**" /></Field>
+                <Field label="Order">
+                  <NativeSelect name="strategy" defaultValue="bfs">
+                    <option value="bfs">Breadth first (overview pages first)</option>
+                    <option value="dfs">Depth first (follow each section down)</option>
+                  </NativeSelect>
+                </Field>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="renderJs" className="size-4" />Site needs JavaScript (slower)</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="analyze" defaultChecked className="size-4" />Summarize with Claude after</label>
+                <div className="flex items-end justify-end"><Button type="submit" disabled={crawlRunning}>{crawlRunning ? 'Crawl running…' : 'Start crawl'}</Button></div>
+                <p className="text-muted-foreground text-xs sm:col-span-2 lg:col-span-4">Paths use <code>*</code> within a segment and <code>**</code> for anything below, e.g. <code>/blog/**</code>. A plain path like <code>/docs</code> also covers everything under it. Logins, carts and feeds are always skipped.</p>
+              </form>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <Card>

@@ -9,13 +9,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { JobBadge } from '@/components/job-badge';
+import { customerJob, simplifyFor } from '@/lib/job-view';
 import { PageHeader } from '@/components/page-header';
 import { ProfileJobBanner } from '@/components/profile-job-banner';
 
 export const metadata = { title: 'Home' };
 
 export default async function HomePage() {
-  const { user, workspace, caps } = await pageContext();
+  const { user, workspace, caps, operator } = await pageContext();
+  const viewerIsOperator = !!(operator ?? user).isOperator;
   const [c, offs, accts, srcs, jobs] = await Promise.all([
     company.get(workspace.id), offerings.list(workspace.id), accounts.list(workspace.id), sources.listAll(workspace.id), jobsRepo.list(workspace.id),
   ]);
@@ -87,12 +89,15 @@ export default async function HomePage() {
         <Card>
           <CardHeader><CardTitle>Recent background jobs</CardTitle><Button asChild variant="outline" size="sm"><Link href="/jobs">All jobs</Link></Button></CardHeader>
           <CardContent className="flex flex-col divide-y">
-            {jobs.slice(0, 3).map((j) => (
-              <div key={j.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                <span className="truncate">{j.title}</span>
-                <span className="flex items-center gap-3"><span className="text-muted-foreground">{timeAgo(j.updatedAt)}</span><JobBadge status={j.status} /></span>
-              </div>
-            ))}
+            {jobs.slice(0, 3).map((j) => {
+              const v = simplifyFor(j, viewerIsOperator) ? customerJob(j) : null;
+              return (
+                <div key={j.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                  <span className="truncate">{v?.title ?? j.title}</span>
+                  <span className="flex items-center gap-3"><span className="text-muted-foreground">{timeAgo(j.updatedAt)}</span><JobBadge status={v?.status ?? j.status} label={v?.label} /></span>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}

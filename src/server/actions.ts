@@ -10,7 +10,7 @@ import { createSession, destroySession, requireUser, signInBlock } from './auth'
 import { hashPassword, verifyPassword } from './password';
 import { assertCan } from './permissions';
 import { accounts, company, newId, offerings, sessions, sources, users, workspaces } from './repo';
-import { startBuildProfile, startCheckSources } from './jobs';
+import { startCheckSources } from './jobs';
 import type { Account, Company, OwnerType, Priority, RowStatus, Source, Stage, ValueRow } from './types';
 
 // ---------- form helpers ----------
@@ -56,7 +56,7 @@ export async function logout() {
 }
 
 // ---------- company ----------
-const COMPANY_FIELDS = ['website', 'tagline', 'founded', 'location', 'stage', 'headcount', 'whatWeDo', 'whoWeSellTo', 'problem', 'howItWorks', 'whyUs', 'proof'] as const;
+const COMPANY_FIELDS = ['website', 'tagline', 'founded', 'location', 'stage', 'headcount', 'whatWeDo', 'whoWeSellTo', 'problem', 'howItWorks', 'pricing', 'whyUs', 'proof'] as const;
 
 export async function updateCompany(fd: FormData) {
   const ctx = await requireUser();
@@ -67,17 +67,6 @@ export async function updateCompany(fd: FormData) {
   await company.put(ctx.workspace.id, c);
   refresh();
   redirect('/company?saved=1');
-}
-
-// Reads the company sources and drafts the empty profile fields in the background.
-export async function buildCompanyProfile() {
-  const ctx = await requireUser();
-  assertCan(ctx, 'company.edit', undefined, '/company');
-  assertCan(ctx, 'jobs.run', undefined, '/company');
-  const name = (await company.get(ctx.workspace.id))?.name ?? ctx.workspace.name;
-  const job = await startBuildProfile(ctx.workspace.id, ctx.user.email, name);
-  refresh();
-  redirect(job ? '/company?saved=job' : '/company?error=no-sources');
 }
 
 // ---------- sources ----------

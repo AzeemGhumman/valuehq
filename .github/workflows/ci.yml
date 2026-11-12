@@ -1,4 +1,4 @@
-# Checks every pull request: type-check, build, and validate the SAM template. Deploys nothing.
+# Checks every pull request: the app (type-check, build, SAM template) and the workers (tests, image, template). Deploys nothing.
 name: CI
 on:
   pull_request:
@@ -23,3 +23,17 @@ jobs:
           use-installer: true
       - name: Validate template
         run: sam validate --lint --region us-east-1
+
+  workers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit tests
+        run: cd workers && python -m unittest discover -s tests
+      - name: Lint the workers template
+        run: pip install cfn-lint && cfn-lint infra/workers.yaml
+      - name: Build the worker image (installs dependencies and runs the tests inside it)
+        run: docker build --platform linux/amd64 -t valuehq-workers:ci workers

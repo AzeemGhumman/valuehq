@@ -1,7 +1,7 @@
 import { pageContext } from '@/server/context';
 import { ViewOnly } from '@/components/view-only';
 import { company, jobsRepo, sources } from '@/server/repo';
-import { buildCompanyProfile, updateCompany } from '@/server/actions';
+import { updateCompany } from '@/server/actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import { ProfileJobBanner } from '@/components/profile-job-banner';
 export const metadata = { title: 'My company' };
 
 const FACTS = [['website', 'Website'], ['tagline', 'Category'], ['founded', 'Founded'], ['location', 'Location'], ['stage', 'Stage'], ['headcount', 'Team size']] as const;
-const ABOUT = [['whatWeDo', 'What we do'], ['whoWeSellTo', 'Who we sell to'], ['problem', 'Problem we solve'], ['howItWorks', 'How it works'], ['whyUs', 'Why customers choose us'], ['proof', 'Proof']] as const;
+const ABOUT = [['whatWeDo', 'What we do'], ['whoWeSellTo', 'Who we sell to'], ['problem', 'Problem we solve'], ['howItWorks', 'How it works'], ['pricing', 'Pricing model'], ['whyUs', 'Why customers choose us'], ['proof', 'Proof']] as const;
 
 export default async function CompanyPage({ searchParams }: { searchParams: Promise<{ saved?: string; error?: string; need?: string }> }) {
   const { workspace, caps } = await pageContext();
@@ -23,15 +23,10 @@ export default async function CompanyPage({ searchParams }: { searchParams: Prom
   const canEdit = caps['company.edit'];
   const [c, items, jobs] = await Promise.all([company.get(workspace.id), sources.list(workspace.id, 'company', workspace.id), jobsRepo.list(workspace.id)]);
   const name = c?.name ?? workspace.name;
-  const building = jobs.some((j) => j.jobType === 'build-profile' && (j.status === 'queued' || j.status === 'running'));
 
   return (
     <>
-      <PageHeader title={name} description="Everything ValueHQ knows about you comes from these sources and this summary.">
-        {caps['company.edit'] && caps['jobs.run'] && (
-          <form action={buildCompanyProfile}><Button type="submit" variant="outline" disabled={building} title="Reads your company sources and fills the empty fields below">{building ? 'Building…' : 'Draft from sources'}</Button></form>
-        )}
-      </PageHeader>
+      <PageHeader title={name} description="Everything ValueHQ knows about you comes from these sources and this summary." />
       <Flash saved={saved} error={error} need={need} />
       <ProfileJobBanner jobs={jobs} company={c} linkToCompany={false} />
       <SourcesCard ownerType="company" ownerId={workspace.id} items={items} returnTo="/company" note="sources about one product go on that offering" canEdit={canEdit} />

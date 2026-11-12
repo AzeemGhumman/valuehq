@@ -18,6 +18,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <nav className="flex items-center gap-4 text-sm text-white/80">
             <Link href="/admin" className="hover:text-white">Orgs</Link>
             <Link href="/admin/orgs/new" className="hover:text-white">New org</Link>
+            <Link href="/admin/crawls" className="hover:text-white">Crawls</Link>
+            <Link href="/admin/costs" className="hover:text-white">Costs</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm">
             {operator ? (

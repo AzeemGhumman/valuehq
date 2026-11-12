@@ -8,13 +8,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AutoRefresh } from '@/components/auto-refresh';
 import { JobBadge } from '@/components/job-badge';
 import { PageHeader } from '@/components/page-header';
+import { CrawlReportView } from '@/components/crawl-report';
+import { customerJob, simplifyFor } from '@/lib/job-view';
 
 export const metadata = { title: 'Background jobs' };
 
 const consoleLink = (arn: string) => `https://${aws.region}.console.aws.amazon.com/states/home?region=${aws.region}#/v2/executions/details/${encodeURIComponent(arn)}`;
 
 export default async function JobsPage() {
-  const { workspace } = await requireUser();
+  const { workspace, user, operator } = await requireUser();
+  const viewerIsOperator = !!(operator ?? user).isOperator;
   const list = await jobsRepo.list(workspace.id);
   const active = list.some((j) => j.status === 'queued' || j.status === 'running');
 
@@ -26,6 +29,32 @@ export default async function JobsPage() {
         <Card><CardContent><p className="text-muted-foreground text-sm">No jobs yet. Open an account and select <strong>Check sources</strong> to start one.</p></CardContent></Card>
       )}
       {list.map((j) => {
+        if (simplifyFor(j, viewerIsOperator)) {
+          const v = customerJob(j);
+          return (
+            <Card key={j.id} id={j.id}>
+              <CardHeader>
+                <div className="flex flex-col gap-1.5">
+                  <CardTitle>{v.title}</CardTitle>
+                  <CardDescription>Started {timeAgo(j.createdAt)} by the ValueHQ team{j.finishedAt ? ` · finished ${timeAgo(j.finishedAt)}` : ''}</CardDescription>
+                </div>
+                <JobBadge status={v.status} label={v.label} />
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <ol className="flex flex-col divide-y rounded-lg border">
+                  {v.steps.map((s, i) => (
+                    <li key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                      <span className="font-medium">{s.name}</span>
+                      <JobBadge status={s.status} label={s.label} />
+                    </li>
+                  ))}
+                </ol>
+                {v.message && <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">{v.message}</p>}
+                {v.status === 'done' && <Link href="/company" className="text-muted-foreground hover:text-foreground text-xs underline">Open company profile</Link>}
+              </CardContent>
+            </Card>
+          );
+        }
         const pct = j.totalCount ? Math.round((j.doneCount / j.totalCount) * 100) : 0;
         return (
           <Card key={j.id} id={j.id}>
@@ -49,10 +78,11 @@ export default async function JobsPage() {
                   </li>
                 ))}
               </ol>
+              <CrawlReportView report={j.report} analysis={j.analysis} />
               {j.error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{j.error}</p>}
               <div className="text-muted-foreground flex flex-wrap gap-4 text-xs">
                 {j.accountId && <Link href={`/accounts/${j.accountId}`} className="hover:text-foreground underline">Open account</Link>}
-                {j.jobType === 'build-profile' && <Link href="/company" className="hover:text-foreground underline">Open company profile</Link>}
+                {(j.jobType === 'build-profile' || j.jobType === 'ingest-website') && <Link href="/company" className="hover:text-foreground underline">Open company profile</Link>}
                 {j.executionArn && <a href={consoleLink(j.executionArn)} target="_blank" rel="noreferrer" className="hover:text-foreground underline">Open in Step Functions</a>}
                 <span>Job {j.id}</span>
               </div>

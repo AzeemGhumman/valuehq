@@ -9,7 +9,7 @@ const SAVED: Record<string, string> = {
   provisioned: 'Org created. Share the sign-in details with their admin.',
   'provisioned-job': 'Org created. Their profile is being built in the background; it shows on their Home page.',
   'org-disabled': 'Org disabled. Its people are signed out and can’t sign in.', 'org-enabled': 'Org enabled',
-  seeded: 'Sample data loaded', 'member-updated': 'Saved', 'user-disabled': 'Disabled. They’re signed out.', 'user-enabled': 'Enabled',
+  seeded: 'Sample data loaded', costs: 'Pulling fresh costs. Reload this page in a minute or two.', 'member-updated': 'Saved', 'user-disabled': 'Disabled. They’re signed out.', 'user-enabled': 'Enabled',
 };
 const ERRORS: Record<string, string> = {
   'wrong-password': 'Your current password is wrong.',
@@ -26,6 +26,10 @@ const ERRORS: Record<string, string> = {
   'org-exists': 'An org with that name already exists.',
   'confirm-name': 'Type the org’s name exactly to delete it.',
   internal: 'The platform team’s own workspace can’t be disabled or deleted.',
+  'no-website': 'Add the company website first.',
+  'no-pages': 'Select at least one page to re-crawl.',
+  'no-crawl': 'That crawl’s settings weren’t saved. Start a new crawl below.',
+  'workers-off': 'Website reading runs in AWS (the workers stack). It isn’t available here; see the README, “Background workers”.',
 };
 
 export function Flash({ saved, error, need }: { saved?: string; error?: string; need?: string }) {
