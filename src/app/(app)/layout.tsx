@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar';
 import { needsAttention } from '@/lib/job-view';
@@ -10,6 +11,9 @@ const order = { P1: 0, P2: 1, P3: 2 } as const;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, workspace, caps, operator } = await pageContext();
+  // Operators only use the app inside a customer org ("Open as admin"). Their own platform workspace has
+  // nothing in it, so outside an org they go to the admin console.
+  if (!operator && user.isOperator) redirect('/admin');
   const [c, offs, accts, jobs] = await Promise.all([
     company.get(workspace.id), offerings.list(workspace.id), accounts.list(workspace.id), jobsRepo.list(workspace.id),
   ]);

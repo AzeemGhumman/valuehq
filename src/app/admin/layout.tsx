@@ -22,10 +22,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/admin/costs" className="hover:text-white">Costs</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm">
-            {operator ? (
-              <form action={exitOrg}><Button type="submit" size="sm" variant="outline" className="h-8 border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white">Leave {workspace.name}</Button></form>
-            ) : (
-              <Link href="/" className="flex items-center gap-1 text-white/80 hover:text-white"><ArrowLeft className="size-4" />App</Link>
+            {operator && (
+              <>
+                <Link href="/" className="flex items-center gap-1 text-white/80 hover:text-white"><ArrowLeft className="size-4" />Back to {workspace.name}</Link>
+                <form action={exitOrg}><Button type="submit" size="sm" variant="outline" className="h-8 border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white">Leave org</Button></form>
+              </>
             )}
             <span className="text-white/70">{me.email}</span>
             <form action={logout}><button type="submit" className="inline-flex size-8 items-center justify-center rounded-md hover:bg-white/10" aria-label="Log out" title="Log out"><LogOut className="size-4" /></button></form>

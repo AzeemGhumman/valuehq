@@ -165,7 +165,7 @@ npm run users -- add you@valuehq.com --name "Your Name" --operator              
 npm run users -- add you@valuehq.com --name "Your Name" --password "your-pw" --operator --env dev   # deployed dev
 ```
 
-Operators live in their own workspace, "ValueHQ Platform", created on first use. It never shows up as a customer org.
+Operators live in their own workspace, "ValueHQ Platform", created on first use. It never shows up as a customer org, and it has no company, offerings or accounts of its own: outside an org, operators always land in the admin console. To see a customer's company, offerings and accounts, use **Open as admin**. The console's top bar then shows **Back to <org>** and **Leave org**.
 
 What the console does:
 
